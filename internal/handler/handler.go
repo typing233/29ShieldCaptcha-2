@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -85,21 +86,16 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !isValidFingerprint(req.Fingerprint) {
+		writeError(w, http.StatusBadRequest, "invalid_fingerprint", "fingerprint must be a 64-character hex string (SHA-256)")
+		return
+	}
+
 	if err := h.challenger.Verify(req.Challenge); err != nil {
 		h.log.Warn().Err(err).Str("challenge_id", req.Challenge.ID).Msg("challenge verification failed")
 		writeJSON(w, http.StatusOK, &VerifyResponse{
 			Success:   false,
 			Error:     err.Error(),
-			Timestamp: time.Now().Unix(),
-		})
-		return
-	}
-
-	if !h.nonces.MarkUsed(req.Challenge.Nonce) {
-		h.log.Warn().Str("challenge_id", req.Challenge.ID).Msg("nonce replay detected")
-		writeJSON(w, http.StatusOK, &VerifyResponse{
-			Success:   false,
-			Error:     "challenge already used (replay detected)",
 			Timestamp: time.Now().Unix(),
 		})
 		return
@@ -120,6 +116,16 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, &VerifyResponse{
 			Success:   false,
 			Error:     "interaction validation failed",
+			Timestamp: time.Now().Unix(),
+		})
+		return
+	}
+
+	if !h.nonces.MarkUsed(req.Challenge.Nonce) {
+		h.log.Warn().Str("challenge_id", req.Challenge.ID).Msg("nonce replay detected")
+		writeJSON(w, http.StatusOK, &VerifyResponse{
+			Success:   false,
+			Error:     "challenge already used (replay detected)",
 			Timestamp: time.Now().Unix(),
 		})
 		return
@@ -168,6 +174,14 @@ func (h *Handler) validateInteraction(data *InteractionData) bool {
 	}
 
 	return hasMovement
+}
+
+func isValidFingerprint(fp string) bool {
+	if len(fp) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(fp)
+	return err == nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
