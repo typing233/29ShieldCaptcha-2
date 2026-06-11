@@ -1,0 +1,22 @@
+services:
+  shieldcaptcha:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - CAPTCHA_HMAC_SECRET=${CAPTCHA_HMAC_SECRET:-}
+      - CAPTCHA_PORT=8080
+      - CAPTCHA_BASE_DIFFICULTY=18
+      - CAPTCHA_MIN_DIFFICULTY=16
+      - CAPTCHA_MAX_DIFFICULTY=24
+      - CAPTCHA_CHALLENGE_TTL=120s
+      - CAPTCHA_RATE_LIMIT=10
+      - CAPTCHA_RATE_BURST=20
+      - CAPTCHA_NONCE_EXPIRY=300s
+      - CAPTCHA_LOG_LEVEL=info
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ShieldCaptcha 验证演示</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .captcha-container { background: #fff; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.1); padding: 32px; width: 380px; text-align: center; }
+        .captcha-title { font-size: 18px; font-weight: 600; margin-bottom: 8px; color: #333; }
+        .captcha-subtitle { font-size: 13px; color: #888; margin-bottom: 24px; }
+        .captcha-widget { position: relative; width: 100%; height: 60px; background: #f0f0f0; border-radius: 8px; border: 2px solid #e0e0e0; cursor: pointer; overflow: hidden; transition: border-color 0.3s; }
+        .captcha-widget:hover { border-color: #4a90d9; }
+        .captcha-widget.active { border-color: #4a90d9; background: #e8f4fd; }
+        .captcha-widget.success { border-color: #4caf50; background: #e8f5e9; }
+        .captcha-widget.error { border-color: #f44336; background: #fce8e6; }
+        .slider-track { position: absolute; top: 0; left: 0; height: 100%; width: 50px; background: #4a90d9; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 20px; transition: width 0.1s; cursor: grab; }
+        .slider-track.dragging { cursor: grabbing; }
+        .widget-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 14px; color: #666; pointer-events: none; }
+        .status { margin-top: 16px; font-size: 13px; color: #666; min-height: 20px; }
+        .status.success { color: #4caf50; }
+        .status.error { color: #f44336; }
+        .progress { margin-top: 12px; height: 3px; background: #e0e0e0; border-radius: 2px; overflow: hidden; }
+        .progress-bar { height: 100%; background: #4a90d9; width: 0%; transition: width 0.3s; }
+        .info { margin-top: 16px; font-size: 11px; color: #aaa; }
+        .retry-btn { margin-top: 12px; padding: 8px 16px; background: #4a90d9; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; display: none; }
+        .retry-btn:hover { background: #357abd; }
+    </style>
+</head>
+<body>
+    <div class="captcha-container">
+        <div class="captcha-title">安全验证</div>
+        <div class="captcha-subtitle">请拖动滑块完成验证</div>
+        <div class="captcha-widget" id="captchaWidget">
+            <div class="slider-track" id="slider">➜</div>
+            <span class="widget-label" id="widgetLabel">向右拖动滑块</span>
+        </div>
+        <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+        <div class="status" id="status"></div>
+        <button class="retry-btn" id="retryBtn">重新验证</button>
+        <div class="info">ShieldCaptcha · PoW + 指纹 + 行为验证</div>
+    </div>
+    <script src="captcha.js"></script>
+</body>
+</html>
