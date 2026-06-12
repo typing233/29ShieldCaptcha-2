@@ -5,7 +5,7 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -31,7 +31,9 @@ services:
       retries: 3
 
   shieldcaptcha:
-    build: .
+    build:
+      context: ..
+      dockerfile: Dockerfile
     ports:
       - "8080:8080"
     environment:
@@ -53,6 +55,7 @@ services:
       - CAPTCHA_ADMIN_ENABLED=true
       - CAPTCHA_ADMIN_USER=${ADMIN_USER:-admin}
       - CAPTCHA_ADMIN_PASS=${ADMIN_PASS:-admin123}
+      - CAPTCHA_JWT_SECRET=${JWT_SECRET:-change-me-in-production}
       - CAPTCHA_METRICS_ENABLED=true
       - CAPTCHA_FEATURE_RISK_ENGINE=true
       - CAPTCHA_FEATURE_BEHAVIOR=true
@@ -70,6 +73,38 @@ services:
       timeout: 3s
       retries: 3
 
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prom-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=30d'
+    restart: unless-stopped
+    depends_on:
+      - shieldcaptcha
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASS:-admin123}
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/provisioning/dashboards/overview.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - grafana-data:/var/lib/grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
 volumes:
   redis-data:
   pg-data:
+  prom-data:
+  grafana-data:

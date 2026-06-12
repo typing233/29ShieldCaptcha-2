@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/shieldcaptcha/internal/challenge"
 	"github.com/shieldcaptcha/internal/config"
+	"github.com/shieldcaptcha/internal/feature"
 	"github.com/shieldcaptcha/internal/handler"
 	"github.com/shieldcaptcha/internal/middleware"
 	"github.com/shieldcaptcha/internal/ratelimit"
@@ -35,7 +36,7 @@ func setupServer(t *testing.T) *httptest.Server {
 	nonceStore := store.NewNonceStore(cfg.NonceExpiry)
 	challengeSvc := challenge.NewService(cfg)
 	limiter := ratelimit.NewLimiter(cfg.RateLimit, cfg.RateBurst)
-	h := handler.New(cfg, challengeSvc, nonceStore, log)
+	h := handler.New(cfg, challengeSvc, nonceStore, log, feature.NewFlags())
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/challenge", h.GetChallenge)

@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/shieldcaptcha/internal/challenge"
 	"github.com/shieldcaptcha/internal/config"
+	"github.com/shieldcaptcha/internal/feature"
 	"github.com/shieldcaptcha/internal/store"
 )
 
@@ -28,7 +29,8 @@ func testHandler() (*Handler, *challenge.Service) {
 	log := zerolog.Nop()
 	nonceStore := store.NewNonceStore(cfg.NonceExpiry)
 	challengeSvc := challenge.NewService(cfg)
-	h := New(cfg, challengeSvc, nonceStore, log)
+	flags := feature.NewFlags()
+	h := New(cfg, challengeSvc, nonceStore, log, flags)
 	return h, challengeSvc
 }
 

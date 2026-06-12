@@ -1,0 +1,25 @@
+{
+  "name": "@shieldcaptcha/sdk",
+  "version": "2.0.0",
+  "description": "ShieldCaptcha behavioral biometrics SDK",
+  "main": "dist/shieldcaptcha.cjs.js",
+  "module": "dist/shieldcaptcha.esm.js",
+  "browser": "dist/shieldcaptcha.umd.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "rollup -c",
+    "dev": "rollup -c -w",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@rollup/plugin-typescript": "^11.1.6",
+    "rollup": "^4.18.0",
+    "@rollup/plugin-terser": "^0.4.4",
+    "tslib": "^2.6.3",
+    "typescript": "^5.5.0"
+  },
+  "keywords": ["captcha", "biometrics", "bot-detection", "security"],
+  "license": "MIT"
+}

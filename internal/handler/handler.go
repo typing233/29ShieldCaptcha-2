@@ -9,23 +9,49 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/shieldcaptcha/internal/challenge"
 	"github.com/shieldcaptcha/internal/config"
+	"github.com/shieldcaptcha/internal/feature"
+	"github.com/shieldcaptcha/internal/metrics"
 	"github.com/shieldcaptcha/internal/store"
 )
 
 type Handler struct {
 	cfg        *config.Config
 	challenger *challenge.Service
-	nonces     *store.NonceStore
+	nonces     store.NonceStorer
 	log        zerolog.Logger
+	flags      *feature.Flags
 }
 
-func New(cfg *config.Config, challenger *challenge.Service, nonces *store.NonceStore, log zerolog.Logger) *Handler {
+func New(cfg *config.Config, challenger *challenge.Service, nonces store.NonceStorer, log zerolog.Logger, flags *feature.Flags) *Handler {
 	return &Handler{
 		cfg:        cfg,
 		challenger: challenger,
 		nonces:     nonces,
 		log:        log,
+		flags:      flags,
 	}
+}
+
+type BehaviorData struct {
+	Trajectory [][]float64       `json:"trajectory"`
+	Timestamps []int64           `json:"timestamps"`
+	Pressures  []float64         `json:"pressures,omitempty"`
+	Features   *BehaviorFeatures `json:"features,omitempty"`
+}
+
+type BehaviorFeatures struct {
+	AvgVelocity      float64   `json:"avg_velocity"`
+	MaxVelocity      float64   `json:"max_velocity"`
+	VelocityVariance float64   `json:"velocity_variance"`
+	AvgAcceleration  float64   `json:"avg_acceleration"`
+	JerkSmoothness   float64   `json:"jerk_smoothness"`
+	Curvature        float64   `json:"curvature"`
+	PauseCount       int       `json:"pause_count"`
+	PauseDurations   []float64 `json:"pause_durations,omitempty"`
+	Straightness     float64   `json:"straightness"`
+	DirectionChanges int       `json:"direction_changes"`
+	TotalPathLength  float64   `json:"total_path_length"`
+	Displacement     float64   `json:"displacement"`
 }
 
 type VerifyRequest struct {
@@ -33,6 +59,7 @@ type VerifyRequest struct {
 	Solution    string               `json:"solution"`
 	Fingerprint string               `json:"fingerprint"`
 	Interaction *InteractionData     `json:"interaction"`
+	Behavior    *BehaviorData        `json:"behavior,omitempty"`
 }
 
 type InteractionData struct {
@@ -43,10 +70,12 @@ type InteractionData struct {
 }
 
 type VerifyResponse struct {
-	Success   bool   `json:"success"`
-	Token     string `json:"token,omitempty"`
-	Error     string `json:"error,omitempty"`
-	Timestamp int64  `json:"timestamp"`
+	Success     bool     `json:"success"`
+	Token       string   `json:"token,omitempty"`
+	Error       string   `json:"error,omitempty"`
+	Timestamp   int64    `json:"timestamp"`
+	RiskScore   float64  `json:"risk_score,omitempty"`
+	RiskReasons []string `json:"risk_reasons,omitempty"`
 }
 
 func (h *Handler) GetChallenge(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +94,8 @@ func (h *Handler) GetChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	metrics.ChallengesIssued.Inc()
+	metrics.ActiveSessions.Inc()
 	h.log.Info().Str("challenge_id", c.ID).Int("difficulty", c.Difficulty).Msg("challenge issued")
 	writeJSON(w, http.StatusOK, c)
 }
@@ -74,6 +105,12 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST only")
 		return
 	}
+
+	start := time.Now()
+	defer func() {
+		metrics.VerificationDuration.Observe(time.Since(start).Seconds())
+		metrics.ActiveSessions.Dec()
+	}()
 
 	var req VerifyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -93,6 +130,7 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.challenger.Verify(req.Challenge); err != nil {
 		h.log.Warn().Err(err).Str("challenge_id", req.Challenge.ID).Msg("challenge verification failed")
+		metrics.VerificationsTotal.WithLabelValues("challenge_fail").Inc()
 		writeJSON(w, http.StatusOK, &VerifyResponse{
 			Success:   false,
 			Error:     err.Error(),
@@ -103,6 +141,7 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 
 	if !h.challenger.VerifyPoW(req.Challenge, req.Solution) {
 		h.log.Warn().Str("challenge_id", req.Challenge.ID).Msg("PoW verification failed")
+		metrics.VerificationsTotal.WithLabelValues("pow_fail").Inc()
 		writeJSON(w, http.StatusOK, &VerifyResponse{
 			Success:   false,
 			Error:     "proof of work verification failed",
@@ -113,6 +152,7 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 
 	if !h.validateInteraction(req.Interaction) {
 		h.log.Warn().Str("challenge_id", req.Challenge.ID).Msg("interaction validation failed")
+		metrics.VerificationsTotal.WithLabelValues("interaction_fail").Inc()
 		writeJSON(w, http.StatusOK, &VerifyResponse{
 			Success:   false,
 			Error:     "interaction validation failed",
@@ -123,6 +163,7 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 
 	if !h.nonces.MarkUsed(req.Challenge.Nonce) {
 		h.log.Warn().Str("challenge_id", req.Challenge.ID).Msg("nonce replay detected")
+		metrics.VerificationsTotal.WithLabelValues("replay").Inc()
 		writeJSON(w, http.StatusOK, &VerifyResponse{
 			Success:   false,
 			Error:     "challenge already used (replay detected)",
@@ -131,6 +172,7 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	metrics.VerificationsTotal.WithLabelValues("pass").Inc()
 	h.log.Info().
 		Str("challenge_id", req.Challenge.ID).
 		Str("fingerprint", req.Fingerprint[:8]+"...").
