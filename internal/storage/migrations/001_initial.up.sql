@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS experiments (
 
 CREATE TABLE IF NOT EXISTS widget_config (
     id              SERIAL PRIMARY KEY,
-    name            VARCHAR(64) NOT NULL DEFAULT 'default',
+    name            VARCHAR(64) NOT NULL UNIQUE DEFAULT 'default',
     config          JSONB NOT NULL DEFAULT '{}',
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

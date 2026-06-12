@@ -13,18 +13,20 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/shieldcaptcha/internal/config"
 	"github.com/shieldcaptcha/internal/middleware"
+	"github.com/shieldcaptcha/internal/ratelimit"
 	"github.com/shieldcaptcha/internal/risk"
 	"github.com/shieldcaptcha/internal/storage"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type AdminHandler struct {
-	cfg     *config.Config
-	pg      *pgxpool.Pool
-	redis   *storage.RedisClient
-	rules   *risk.RuleEvaluator
-	auth    *middleware.AuthMiddleware
-	log     zerolog.Logger
+	cfg             *config.Config
+	pg              *pgxpool.Pool
+	redis           *storage.RedisClient
+	rules           *risk.RuleEvaluator
+	auth            *middleware.AuthMiddleware
+	log             zerolog.Logger
+	adaptiveLimiter *ratelimit.AdaptiveLimiter
 }
 
 func NewAdminHandler(cfg *config.Config, pg *pgxpool.Pool, redis *storage.RedisClient, rules *risk.RuleEvaluator, auth *middleware.AuthMiddleware, log zerolog.Logger) *AdminHandler {
@@ -36,6 +38,10 @@ func NewAdminHandler(cfg *config.Config, pg *pgxpool.Pool, redis *storage.RedisC
 		auth:  auth,
 		log:   log,
 	}
+}
+
+func (ah *AdminHandler) SetAdaptiveLimiter(al *ratelimit.AdaptiveLimiter) {
+	ah.adaptiveLimiter = al
 }
 
 func (ah *AdminHandler) Routes() chi.Router {
@@ -65,6 +71,8 @@ func (ah *AdminHandler) Routes() chi.Router {
 			r.Post("/unblock", ah.Unblock)
 			r.Get("/config/difficulty", ah.GetDifficulty)
 			r.Put("/config/difficulty", ah.SetDifficulty)
+			r.Get("/config/widget", ah.GetWidgetStyle)
+			r.Put("/config/widget", ah.SetWidgetStyle)
 			r.Get("/experiments", ah.GetExperiments)
 			r.Post("/experiments", ah.CreateExperiment)
 			r.Put("/experiments/{id}", ah.UpdateExperiment)
@@ -423,6 +431,7 @@ func (ah *AdminHandler) Unblock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Clear Redis keys
 	if ah.redis != nil {
 		ctx := r.Context()
 		if req.IP != "" {
@@ -434,6 +443,11 @@ func (ah *AdminHandler) Unblock(w http.ResponseWriter, r *http.Request) {
 			_ = ah.redis.Del(ctx, ah.redis.Key("arl", "fp", req.Fingerprint))
 			_ = ah.redis.Del(ctx, ah.redis.Key("rep", "fp_fail", req.Fingerprint))
 		}
+	}
+
+	// Also relax the in-memory tightened state so this process immediately allows traffic
+	if ah.adaptiveLimiter != nil {
+		ah.adaptiveLimiter.Unblock(req.IP, req.Fingerprint)
 	}
 
 	user := middleware.GetUser(r.Context())
@@ -469,6 +483,66 @@ func (ah *AdminHandler) SetDifficulty(w http.ResponseWriter, r *http.Request) {
 
 	user := middleware.GetUser(r.Context())
 	ah.auditLog(r.Context(), user.UserID, user.Username, "set_difficulty", "", map[string]interface{}{"base": req.Base, "min": req.Min, "max": req.Max}, r)
+	writeJSON(w, 200, map[string]string{"status": "updated"})
+}
+
+// --- Widget Style Config ---
+
+func (ah *AdminHandler) GetWidgetStyle(w http.ResponseWriter, r *http.Request) {
+	if ah.pg == nil {
+		writeJSON(w, 200, map[string]interface{}{
+			"primaryColor": "#1890ff", "sliderShape": "round", "width": 380, "height": 48,
+		})
+		return
+	}
+	ctx := r.Context()
+	var configJSON []byte
+	err := ah.pg.QueryRow(ctx, "SELECT config FROM widget_config WHERE name = 'default' LIMIT 1").Scan(&configJSON)
+	if err != nil || configJSON == nil {
+		writeJSON(w, 200, map[string]interface{}{
+			"primaryColor": "#1890ff", "sliderShape": "round", "width": 380, "height": 48,
+		})
+		return
+	}
+	var cfg map[string]interface{}
+	if json.Unmarshal(configJSON, &cfg) != nil {
+		writeJSON(w, 200, map[string]interface{}{})
+		return
+	}
+	writeJSON(w, 200, cfg)
+}
+
+func (ah *AdminHandler) SetWidgetStyle(w http.ResponseWriter, r *http.Request) {
+	var req map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	if ah.pg == nil {
+		writeJSON(w, 500, map[string]string{"error": "database not available"})
+		return
+	}
+
+	configJSON, err := json.Marshal(req)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid config data"})
+		return
+	}
+
+	ctx := r.Context()
+	_, err = ah.pg.Exec(ctx,
+		`INSERT INTO widget_config (name, config, updated_at) VALUES ('default', $1, NOW())
+		 ON CONFLICT (name) DO UPDATE SET config = $1, updated_at = NOW()`,
+		configJSON)
+	if err != nil {
+		ah.log.Error().Err(err).Msg("failed to save widget config")
+		writeJSON(w, 500, map[string]string{"error": "save failed"})
+		return
+	}
+
+	user := middleware.GetUser(ctx)
+	ah.auditLog(ctx, user.UserID, user.Username, "set_widget_style", "widget_config", req, r)
 	writeJSON(w, 200, map[string]string{"status": "updated"})
 }
 

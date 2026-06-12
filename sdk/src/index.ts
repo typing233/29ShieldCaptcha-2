@@ -47,12 +47,39 @@ export function render(container: HTMLElement | string, options: CaptchaOptions 
   async function loadRemoteConfig() {
     try {
       const config: WidgetConfig = await transport.fetchWidgetConfig();
-      if (config.theme) {
-        widget.applyTheme(config.theme as Partial<ThemeConfig>);
+      let themeToApply = config.theme;
+
+      // Apply experiment: if active, assign user to group A or B based on traffic_pct
+      if (config.experiment) {
+        const hash = simpleHash(await collectFingerprint());
+        const bucket = hash % 100;
+        const inExperiment = bucket < config.experiment.traffic_pct;
+        if (inExperiment) {
+          // Group B gets experimental config, Group A gets config_a
+          const expConfig = bucket < (config.experiment.traffic_pct / 2)
+            ? config.experiment.config_a
+            : config.experiment.config_b;
+          if (expConfig && typeof expConfig === 'object') {
+            themeToApply = { ...(themeToApply || {}), ...expConfig } as WidgetConfig['theme'];
+          }
+        }
+      }
+
+      if (themeToApply) {
+        widget.applyTheme(themeToApply as Partial<ThemeConfig>);
       }
     } catch {
       // Non-critical: continue with local/default theme
     }
+  }
+
+  function simpleHash(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) - hash) + str.charCodeAt(i);
+      hash |= 0;
+    }
+    return Math.abs(hash);
   }
 
   async function prefetchChallenge() {

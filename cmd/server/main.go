@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"github.com/shieldcaptcha/internal/challenge"
@@ -129,8 +130,9 @@ func main() {
 	}
 
 	// Adaptive rate limiter
+	var adaptiveLimiter *ratelimit.AdaptiveLimiter
 	if redisClient != nil && redisClient.Available() {
-		adaptiveLimiter := ratelimit.NewAdaptiveLimiter(redisClient, int(cfg.RateLimit)*60, time.Minute, memLimiter, log)
+		adaptiveLimiter = ratelimit.NewAdaptiveLimiter(redisClient, int(cfg.RateLimit)*60, time.Minute, memLimiter, log)
 		h.SetAdaptiveLimiter(adaptiveLimiter)
 	}
 
@@ -156,21 +158,15 @@ func main() {
 	// Admin panel API
 	if cfg.AdminEnabled {
 		authMw := middleware.NewAuthMiddleware(cfg.JWTSecret, log)
-		var pgPool *storage.PostgresClient
+		var pgPool *pgxpool.Pool
 		if pgClient != nil {
-			pgPool = pgClient
+			pgPool = pgClient.Pool
 		}
-		if pgPool != nil {
-			adminH := handler.NewAdminHandler(cfg, pgPool.Pool, redisClient, ruleEval, authMw, log)
-			r.Route("/admin/api", func(admin chi.Router) {
-				admin.Mount("/", adminH.Routes())
-			})
-		} else {
-			adminH := handler.NewAdminHandler(cfg, nil, redisClient, ruleEval, authMw, log)
-			r.Route("/admin/api", func(admin chi.Router) {
-				admin.Mount("/", adminH.Routes())
-			})
-		}
+		adminH := handler.NewAdminHandler(cfg, pgPool, redisClient, ruleEval, authMw, log)
+		adminH.SetAdaptiveLimiter(adaptiveLimiter)
+		r.Route("/admin/api", func(admin chi.Router) {
+			admin.Mount("/", adminH.Routes())
+		})
 		log.Info().Msg("admin panel enabled")
 	}
 

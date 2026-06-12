@@ -121,6 +121,8 @@ type VerifyResponse struct {
 	Timestamp   int64    `json:"timestamp"`
 	RiskScore   float64  `json:"risk_score,omitempty"`
 	RiskReasons []string `json:"risk_reasons,omitempty"`
+	RiskAction  string   `json:"risk_action,omitempty"`
+	NextDifficulty int   `json:"next_difficulty,omitempty"`
 }
 
 func (h *Handler) GetChallenge(w http.ResponseWriter, r *http.Request) {
@@ -211,16 +213,38 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 
 	var req VerifyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		metrics.VerificationsTotal.WithLabelValues("invalid_body").Inc()
+		h.asyncLog(&verificationLog{
+			IP: ip, Result: "fail", HitReasons: []string{"invalid_body"},
+			DurationMs: int(time.Since(start).Milliseconds()),
+		})
 		writeError(w, http.StatusBadRequest, "invalid_body", "malformed JSON request")
 		return
 	}
 
 	if req.Challenge == nil || req.Solution == "" || req.Fingerprint == "" || req.Interaction == nil {
+		metrics.VerificationsTotal.WithLabelValues("missing_fields").Inc()
+		chalID := ""
+		fp := req.Fingerprint
+		if req.Challenge != nil {
+			chalID = req.Challenge.ID
+		}
+		h.asyncLog(&verificationLog{
+			ChallengeID: chalID, Fingerprint: fp,
+			IP: ip, Result: "fail", HitReasons: []string{"missing_fields"},
+			DurationMs: int(time.Since(start).Milliseconds()),
+		})
 		writeError(w, http.StatusBadRequest, "missing_fields", "challenge, solution, fingerprint, and interaction are required")
 		return
 	}
 
 	if !isValidFingerprint(req.Fingerprint) {
+		metrics.VerificationsTotal.WithLabelValues("invalid_fingerprint").Inc()
+		h.asyncLog(&verificationLog{
+			ChallengeID: req.Challenge.ID, Fingerprint: req.Fingerprint,
+			IP: ip, Result: "fail", HitReasons: []string{"invalid_fingerprint"},
+			DurationMs: int(time.Since(start).Milliseconds()),
+		})
 		writeError(w, http.StatusBadRequest, "invalid_fingerprint", "fingerprint must be a 64-character hex string (SHA-256)")
 		return
 	}
@@ -236,13 +260,15 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 			metrics.RateLimitHits.WithLabelValues(blockedDim).Inc()
 			h.asyncLog(&verificationLog{
 				ChallengeID: req.Challenge.ID, Fingerprint: req.Fingerprint,
-				IP: ip, Result: "block", DurationMs: int(time.Since(start).Milliseconds()),
+				IP: ip, Result: "block", HitReasons: []string{"rate_limit:" + blockedDim},
+				DurationMs: int(time.Since(start).Milliseconds()),
 			})
 			writeJSON(w, http.StatusOK, &VerifyResponse{
 				Success:     false,
 				Error:       "rate limit exceeded",
 				Timestamp:   time.Now().Unix(),
 				RiskReasons: []string{"adaptive rate limit: " + blockedDim},
+				RiskAction:  "block",
 			})
 			return
 		}
@@ -253,7 +279,8 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 		metrics.VerificationsTotal.WithLabelValues("challenge_fail").Inc()
 		h.asyncLog(&verificationLog{
 			ChallengeID: req.Challenge.ID, Fingerprint: req.Fingerprint,
-			IP: ip, Result: "fail", DurationMs: int(time.Since(start).Milliseconds()),
+			IP: ip, Result: "fail", HitReasons: []string{"challenge_invalid:" + err.Error()},
+			DurationMs: int(time.Since(start).Milliseconds()),
 		})
 		writeJSON(w, http.StatusOK, &VerifyResponse{
 			Success: false, Error: err.Error(), Timestamp: time.Now().Unix(),
@@ -266,7 +293,8 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 		metrics.VerificationsTotal.WithLabelValues("pow_fail").Inc()
 		h.asyncLog(&verificationLog{
 			ChallengeID: req.Challenge.ID, Fingerprint: req.Fingerprint,
-			IP: ip, Result: "fail", DurationMs: int(time.Since(start).Milliseconds()),
+			IP: ip, Result: "fail", HitReasons: []string{"pow_invalid"},
+			DurationMs: int(time.Since(start).Milliseconds()),
 		})
 		writeJSON(w, http.StatusOK, &VerifyResponse{
 			Success: false, Error: "proof of work verification failed", Timestamp: time.Now().Unix(),
@@ -279,7 +307,8 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 		metrics.VerificationsTotal.WithLabelValues("interaction_fail").Inc()
 		h.asyncLog(&verificationLog{
 			ChallengeID: req.Challenge.ID, Fingerprint: req.Fingerprint,
-			IP: ip, Result: "fail", DurationMs: int(time.Since(start).Milliseconds()),
+			IP: ip, Result: "fail", HitReasons: []string{"interaction_invalid"},
+			DurationMs: int(time.Since(start).Milliseconds()),
 		})
 		writeJSON(w, http.StatusOK, &VerifyResponse{
 			Success: false, Error: "interaction validation failed", Timestamp: time.Now().Unix(),
@@ -302,11 +331,9 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 				Msg("blocked by risk engine")
 			metrics.VerificationsTotal.WithLabelValues("block").Inc()
 
-			// Tighten adaptive rate limit for this IP/fingerprint
 			if h.adaptiveLimiter != nil {
 				h.adaptiveLimiter.RecordBlock(ip, req.Fingerprint)
 			}
-			// Record failure in reputation
 			if h.reputationScorer != nil {
 				h.reputationScorer.RecordResult(r.Context(), ip, req.Fingerprint, false)
 			}
@@ -323,6 +350,7 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 				Timestamp:   time.Now().Unix(),
 				RiskScore:   riskDecision.Score,
 				RiskReasons: riskDecision.Reasons,
+				RiskAction:  string(risk.ActionBlock),
 			})
 			return
 		}
@@ -334,7 +362,8 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 		metrics.VerificationsTotal.WithLabelValues("replay").Inc()
 		h.asyncLog(&verificationLog{
 			ChallengeID: req.Challenge.ID, Fingerprint: req.Fingerprint,
-			IP: ip, Result: "fail", DurationMs: int(time.Since(start).Milliseconds()),
+			IP: ip, Result: "fail", HitReasons: []string{"nonce_replay"},
+			DurationMs: int(time.Since(start).Milliseconds()),
 		})
 		writeJSON(w, http.StatusOK, &VerifyResponse{
 			Success: false, Error: "challenge already used (replay detected)", Timestamp: time.Now().Unix(),
@@ -342,24 +371,46 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- Success ---
+	// --- Success (with differentiated risk actions) ---
 	metrics.VerificationsTotal.WithLabelValues("pass").Inc()
 
-	// Record success in reputation system
 	if h.reputationScorer != nil {
 		h.reputationScorer.RecordResult(r.Context(), ip, req.Fingerprint, true)
 	}
 
 	var riskScore float64
 	var riskReasons []string
+	var riskAction string
+	var nextDifficulty int
 	if riskDecision != nil {
 		riskScore = riskDecision.Score
 		riskReasons = riskDecision.Reasons
+		riskAction = string(riskDecision.Action)
+
+		switch riskDecision.Action {
+		case risk.ActionEscalate:
+			nextDifficulty = h.cfg.BaseDifficulty + 2
+			if nextDifficulty > h.cfg.MaxDifficulty {
+				nextDifficulty = h.cfg.MaxDifficulty
+			}
+		case risk.ActionReview:
+			nextDifficulty = h.cfg.BaseDifficulty + 1
+			if nextDifficulty > h.cfg.MaxDifficulty {
+				nextDifficulty = h.cfg.MaxDifficulty
+			}
+		}
+	}
+
+	logResult := "pass"
+	if riskAction == string(risk.ActionEscalate) {
+		logResult = "escalate"
+	} else if riskAction == string(risk.ActionReview) {
+		logResult = "review"
 	}
 
 	h.asyncLog(&verificationLog{
 		ChallengeID: req.Challenge.ID, Fingerprint: req.Fingerprint,
-		IP: ip, Result: "pass", RiskScore: &riskScore,
+		IP: ip, Result: logResult, RiskScore: &riskScore,
 		HitReasons: riskReasons, BehaviorData: req.Behavior,
 		DurationMs: int(time.Since(start).Milliseconds()),
 	})
@@ -367,6 +418,7 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 	h.log.Info().
 		Str("challenge_id", req.Challenge.ID).
 		Str("fingerprint", req.Fingerprint[:8]+"...").
+		Str("action", riskAction).
 		Msg("verification successful")
 
 	resp := &VerifyResponse{
@@ -377,6 +429,10 @@ func (h *Handler) VerifyChallenge(w http.ResponseWriter, r *http.Request) {
 	if riskDecision != nil && riskDecision.Score > 0 {
 		resp.RiskScore = riskDecision.Score
 		resp.RiskReasons = riskDecision.Reasons
+		resp.RiskAction = riskAction
+	}
+	if nextDifficulty > 0 {
+		resp.NextDifficulty = nextDifficulty
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
