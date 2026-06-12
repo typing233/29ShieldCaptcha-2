@@ -44,6 +44,7 @@ export declare class CaptchaWidget {
     };
     getTrajectory(): number[][];
     setStatus(status: WidgetStatus, message?: string): void;
+    applyTheme(partial: Partial<ThemeConfig>): void;
     reset(): void;
     destroy(): void;
     private render;

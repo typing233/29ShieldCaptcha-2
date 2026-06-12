@@ -21,5 +21,5 @@ export { extractFeaturesFromRaw } from './core/features';
 export { Transport } from './transport';
 export { CaptchaWidget } from './widget';
 export type { ThemeConfig, WidgetStatus } from './widget';
-export type { Challenge, VerifyResult, VerifyPayload } from './transport';
+export type { Challenge, VerifyResult, VerifyPayload, WidgetConfig } from './transport';
 export type { BehaviorPayload, BehaviorFeatures, Point } from './core/biometrics';

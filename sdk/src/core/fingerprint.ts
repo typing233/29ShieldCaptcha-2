@@ -96,7 +96,7 @@ async function getAudioFingerprint(): Promise<string> {
     oscillator.start(0);
 
     const result = await new Promise<string>((resolve) => {
-      scriptProcessor.onaudioprocess = (event) => {
+      scriptProcessor.onaudioprocess = (event: AudioProcessingEvent) => {
         const data = event.inputBuffer.getChannelData(0);
         let sum = 0;
         for (let i = 0; i < data.length; i++) {

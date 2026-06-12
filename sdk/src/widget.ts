@@ -97,6 +97,16 @@ export class CaptchaWidget {
     }
   }
 
+  applyTheme(partial: Partial<ThemeConfig>): void {
+    const changed = Object.keys(partial).some(
+      k => (partial as any)[k] !== (this.theme as any)[k]
+    );
+    if (!changed) return;
+    this.theme = { ...this.theme, ...partial };
+    this.container.innerHTML = '';
+    this.render();
+  }
+
   reset(): void {
     this.thumbX = 0;
     this.thumb.style.left = '0px';

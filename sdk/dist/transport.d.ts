@@ -27,9 +27,24 @@ export interface VerifyResult {
     risk_score?: number;
     risk_reasons?: string[];
 }
+export interface WidgetConfig {
+    theme?: {
+        primaryColor?: string;
+        sliderShape?: string;
+        width?: number;
+        height?: number;
+    };
+    experiment?: {
+        name: string;
+        traffic_pct: number;
+        config_a: Record<string, unknown>;
+        config_b: Record<string, unknown>;
+    } | null;
+}
 export declare class Transport {
     private apiBase;
     constructor(apiBase: string);
     fetchChallenge(): Promise<Challenge>;
+    fetchWidgetConfig(): Promise<WidgetConfig>;
     submitVerification(payload: VerifyPayload): Promise<VerifyResult>;
 }

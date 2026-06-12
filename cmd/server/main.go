@@ -95,7 +95,6 @@ func main() {
 	riskEngine.RegisterScorer(risk.NewBehaviorScorer())
 	if redisClient != nil {
 		riskEngine.RegisterScorer(risk.NewReplayScorer(redisClient, log))
-		riskEngine.RegisterScorer(risk.NewReputationScorer(redisClient, log))
 	}
 
 	// Rule Evaluator
@@ -107,8 +106,33 @@ func main() {
 		ruleEval = risk.NewRuleEvaluator(nil, log)
 	}
 
+	// Reputation Scorer (used by both risk engine and handler)
+	var reputationScorer *risk.ReputationScorer
+	if redisClient != nil {
+		reputationScorer = risk.NewReputationScorer(redisClient, log)
+		riskEngine.RegisterScorer(reputationScorer)
+	}
+
 	challengeSvc := challenge.NewService(cfg)
 	h := handler.New(cfg, challengeSvc, nonceStorer, log, flags)
+
+	// Wire dependencies into handler
+	h.SetRiskEngine(riskEngine)
+	if redisClient != nil {
+		h.SetRedis(redisClient)
+	}
+	if pgClient != nil {
+		h.SetPostgres(pgClient.Pool)
+	}
+	if reputationScorer != nil {
+		h.SetReputationScorer(reputationScorer)
+	}
+
+	// Adaptive rate limiter
+	if redisClient != nil && redisClient.Available() {
+		adaptiveLimiter := ratelimit.NewAdaptiveLimiter(redisClient, int(cfg.RateLimit)*60, time.Minute, memLimiter, log)
+		h.SetAdaptiveLimiter(adaptiveLimiter)
+	}
 
 	r := chi.NewRouter()
 
@@ -126,6 +150,7 @@ func main() {
 		api.Use(rateMw)
 		api.Get("/challenge", h.GetChallenge)
 		api.Post("/verify", h.VerifyChallenge)
+		api.Get("/config", h.GetWidgetConfig)
 	})
 
 	// Admin panel API

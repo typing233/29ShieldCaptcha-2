@@ -445,6 +445,30 @@ function solvePoW(id, nonce, difficulty, onProgress) {
     });
 }
 
+function serializeBehavior(behavior) {
+    const result = {
+        trajectory: behavior.trajectory,
+        timestamps: behavior.timestamps,
+        pressures: behavior.pressures,
+    };
+    if (behavior.features) {
+        result.features = {
+            avg_velocity: behavior.features.avgVelocity,
+            max_velocity: behavior.features.maxVelocity,
+            velocity_variance: behavior.features.velocityVariance,
+            avg_acceleration: behavior.features.avgAcceleration,
+            jerk_smoothness: behavior.features.jerkSmoothness,
+            curvature: behavior.features.curvature,
+            pause_count: behavior.features.pauseCount,
+            pause_durations: behavior.features.pauseDurations,
+            straightness: behavior.features.straightness,
+            direction_changes: behavior.features.directionChanges,
+            total_path_length: behavior.features.totalPathLength,
+            displacement: behavior.features.displacement,
+        };
+    }
+    return result;
+}
 class Transport {
     constructor(apiBase) {
         this.apiBase = apiBase.replace(/\/$/, '');
@@ -459,11 +483,30 @@ class Transport {
         }
         return resp.json();
     }
+    async fetchWidgetConfig() {
+        const resp = await fetch(`${this.apiBase}/api/config`, {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        if (!resp.ok) {
+            return {};
+        }
+        return resp.json();
+    }
     async submitVerification(payload) {
+        const body = {
+            challenge: payload.challenge,
+            solution: payload.solution,
+            fingerprint: payload.fingerprint,
+            interaction: payload.interaction,
+        };
+        if (payload.behavior) {
+            body.behavior = serializeBehavior(payload.behavior);
+        }
         const resp = await fetch(`${this.apiBase}/api/verify`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+            body: JSON.stringify(body),
         });
         if (!resp.ok && resp.status !== 200) {
             throw new Error(`Verification request failed: ${resp.status}`);
@@ -526,6 +569,14 @@ class CaptchaWidget {
             this.fill.style.backgroundColor = this.theme.errorColor;
             setTimeout(() => this.reset(), 2000);
         }
+    }
+    applyTheme(partial) {
+        const changed = Object.keys(partial).some(k => partial[k] !== this.theme[k]);
+        if (!changed)
+            return;
+        this.theme = { ...this.theme, ...partial };
+        this.container.innerHTML = '';
+        this.render();
     }
     reset() {
         this.thumbX = 0;
@@ -753,11 +804,10 @@ function emptyFeatures() {
 }
 
 function render(container, options = {}) {
+    var _a;
     const el = typeof container === 'string'
-        ? document.querySelector(container)
+        ? ((_a = document.querySelector(container)) !== null && _a !== void 0 ? _a : (() => { throw new Error('ShieldCaptcha: container not found'); })())
         : container;
-    if (!el)
-        throw new Error('ShieldCaptcha: container not found');
     const apiBase = options.apiBase || window.CAPTCHA_API_BASE || '';
     const transport = new Transport(apiBase);
     const biometrics = new BiometricsCollector();
@@ -768,12 +818,24 @@ function render(container, options = {}) {
         onReady: () => {
             if (enableBiometrics)
                 biometrics.start(el);
+            loadRemoteConfig();
             prefetchChallenge();
         },
         onDragEnd: async () => {
             await runVerification();
         },
     }, options.locale);
+    async function loadRemoteConfig() {
+        try {
+            const config = await transport.fetchWidgetConfig();
+            if (config.theme) {
+                widget.applyTheme(config.theme);
+            }
+        }
+        catch (_a) {
+            // Non-critical: continue with local/default theme
+        }
+    }
     async function prefetchChallenge() {
         try {
             currentChallenge = await transport.fetchChallenge();
@@ -826,8 +888,9 @@ function render(container, options = {}) {
             }
         }
         catch (err) {
-            widget.setStatus('error', err.message || '网络错误');
-            (_c = options.onError) === null || _c === void 0 ? void 0 : _c.call(options, err.message || 'network_error');
+            const message = err instanceof Error ? err.message : '网络错误';
+            widget.setStatus('error', message);
+            (_c = options.onError) === null || _c === void 0 ? void 0 : _c.call(options, message);
             currentChallenge = null;
             prefetchChallenge();
         }

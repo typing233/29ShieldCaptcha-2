@@ -1,7 +1,7 @@
 import { BiometricsCollector, BehaviorPayload } from './core/biometrics';
 import { collectFingerprint } from './core/fingerprint';
 import { solvePoW } from './core/pow-worker';
-import { Transport, Challenge, VerifyResult } from './transport';
+import { Transport, Challenge, VerifyResult, WidgetConfig } from './transport';
 import { CaptchaWidget, ThemeConfig } from './widget';
 
 export interface CaptchaOptions {
@@ -21,10 +21,9 @@ export interface CaptchaInstance {
 }
 
 export function render(container: HTMLElement | string, options: CaptchaOptions = {}): CaptchaInstance {
-  const el = typeof container === 'string'
-    ? document.querySelector<HTMLElement>(container)
+  const el: HTMLElement = typeof container === 'string'
+    ? (document.querySelector<HTMLElement>(container) ?? (() => { throw new Error('ShieldCaptcha: container not found'); })())
     : container;
-  if (!el) throw new Error('ShieldCaptcha: container not found');
 
   const apiBase = options.apiBase || (window as any).CAPTCHA_API_BASE || '';
   const transport = new Transport(apiBase);
@@ -37,12 +36,24 @@ export function render(container: HTMLElement | string, options: CaptchaOptions 
   const widget = new CaptchaWidget(el, options.theme, {
     onReady: () => {
       if (enableBiometrics) biometrics.start(el);
+      loadRemoteConfig();
       prefetchChallenge();
     },
     onDragEnd: async () => {
       await runVerification();
     },
   }, options.locale);
+
+  async function loadRemoteConfig() {
+    try {
+      const config: WidgetConfig = await transport.fetchWidgetConfig();
+      if (config.theme) {
+        widget.applyTheme(config.theme as Partial<ThemeConfig>);
+      }
+    } catch {
+      // Non-critical: continue with local/default theme
+    }
+  }
 
   async function prefetchChallenge() {
     try {
@@ -98,9 +109,10 @@ export function render(container: HTMLElement | string, options: CaptchaOptions 
         }
         prefetchChallenge();
       }
-    } catch (err: any) {
-      widget.setStatus('error', err.message || '网络错误');
-      options.onError?.(err.message || 'network_error');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : '网络错误';
+      widget.setStatus('error', message);
+      options.onError?.(message);
       currentChallenge = null;
       prefetchChallenge();
     }
@@ -132,5 +144,5 @@ export { extractFeaturesFromRaw } from './core/features';
 export { Transport } from './transport';
 export { CaptchaWidget } from './widget';
 export type { ThemeConfig, WidgetStatus } from './widget';
-export type { Challenge, VerifyResult, VerifyPayload } from './transport';
+export type { Challenge, VerifyResult, VerifyPayload, WidgetConfig } from './transport';
 export type { BehaviorPayload, BehaviorFeatures, Point } from './core/biometrics';
